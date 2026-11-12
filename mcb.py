@@ -42,7 +42,7 @@ except Exception:
 
 RESOURCE_DIR = os.path.dirname(os.path.abspath(__file__))
 HERE = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else RESOURCE_DIR
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.1.2"
 APP_NAME = "嬗变台自动刷取"
 REPO_URL = "https://github.com/MyRemme/mc-transmute-bot"
 BILIBILI_URL = "https://space.bilibili.com/1746890498"
@@ -695,6 +695,15 @@ def build_mask(img_rgb, tol: int = 34):
     edge_colors, edge_counts = np.unique(edges, axis=0, return_counts=True)
     for color in edge_colors[edge_counts >= max(4, min(h, w) * 0.2)]:
         m &= np.abs(rgb - color).sum(axis=2) > tol
+    # Slot bevels can sit a few pixels inside the crop's outer frame.
+    depth = max(1, min(4, min(h, w) // 12))
+    for band, axis, length in ((q[:depth], 0, w), (q[-depth:], 0, w),
+                               (q[:, :depth], 1, h), (q[:, -depth:], 1, h)):
+        colors, counts = np.unique(band.reshape(-1, 3), axis=0, return_counts=True)
+        for color in colors[counts >= max(4, length * 0.6)]:
+            coverage = np.any(np.all(band == color, axis=2), axis=axis).sum()
+            if coverage >= length * 0.6:
+                m &= np.abs(rgb - color).sum(axis=2) > tol
     frac = float(m.mean())
     if frac < 0.03 or frac > 0.97:
         return np.ones((h, w), bool)

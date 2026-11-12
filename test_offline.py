@@ -177,6 +177,32 @@ class VisionTests(unittest.TestCase):
                          rgb=np.asarray(screen, dtype=np.float32))[0]
         self.assertGreater(score, 0.99)
 
+    def test_multiple_targets_match_with_inset_green_slot_border(self):
+        targets = []
+        icons = []
+        for index, color in enumerate(((25, 110, 175), (48, 179, 49), (174, 59, 189))):
+            pixels = np.random.default_rng(index).integers(0, 65, (32, 32, 3), dtype=np.uint8)
+            pixels = np.clip(pixels.astype(int) + np.asarray(color) - 32, 0, 255).astype(np.uint8)
+            icon = Image.fromarray(pixels)
+            icons.append(icon)
+            template = Image.new("RGB", (55, 56), (1, 1, 3))
+            template.paste((78, 255, 33), (1, 1, 52, 52))
+            template.paste((145, 255, 89), (4, 4, 52, 52))
+            template.paste(icon, (10, 10))
+            variants = mcb.build_variants(template)
+            self.assertFalse(variants[0][3][2, 20])
+            self.assertTrue(variants[0][3][20, 20])
+            targets.append((f"item-{index}", variants[0], variants))
+
+        for index, icon in enumerate(icons):
+            frame = Image.new("RGB", (96, 96), (139, 139, 139))
+            frame.paste(icon, (34, 34))
+            with self.subTest(target=index):
+                result = mcb.scan(mcb._to_gray(frame), targets, 0.9,
+                                  rgb=np.asarray(frame, dtype=np.float32))
+                self.assertEqual(result[1], f"item-{index}")
+                self.assertGreater(result[0], 0.99)
+
     def test_distinct_colors_are_loaded_as_separate_targets(self):
         with tempfile.TemporaryDirectory() as directory:
             self.icon.save(os.path.join(directory, "a.png"))

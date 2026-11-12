@@ -8,7 +8,7 @@ Windows 桌面工具，用截图和 RGB 模板匹配识别 Minecraft Alex’s Mo
 
 ## 一键运行
 
-1. 在 [Releases](https://github.com/MyRemme/mc-transmute-bot/releases/latest) 下载 `mc-transmute-bot-1.1.1-windows-x64.zip`。
+1. 在 [Releases](https://github.com/MyRemme/mc-transmute-bot/releases/latest) 下载 `mc-transmute-bot-1.1.2-windows-x64.zip`。
 2. 将压缩包完整解压到有写入权限的文件夹，双击 `嬗变台自动刷取.exe`。
 3. 打开 Minecraft，按下面的说明选择窗口、添加目标并标定候选。
 
@@ -93,6 +93,8 @@ python gui.py
 ## 识别与性能
 
 匹配使用 RGB 三通道和物品遮罩，比较物品颜色与图案。背景和槽位边框通过遮罩剔除。模板频谱缓存、图像频谱复用及刷新画面复用减少重复计算，短时窗口句柄缓存减少重复枚举。
+
+v1.1.2 修正了向内偏移的绿色槽位边框被算作物品的问题。三个目标同时启用的真实游戏测试中，第 37 轮命中一个目标，匹配分数 1.000，选择后底部得到该目标并停止。绿色目标在同一游戏画面中的匹配分数由 0.739 提升到 0.997。
 
 图片数量没有硬上限，耗时随模板数量和缩放变体数量增加。同机使用保存的三个 96×96 候选裁图测量，单模板纯匹配中位耗时约 25.9 毫秒，4 个模板约 87.6 毫秒。实际每轮还包含窗口检查、截图、点击和游戏刷新等待，耗时随机器和素材变化。
 
