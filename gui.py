@@ -31,6 +31,125 @@ FONT_T = ("Microsoft YaHei UI", 11, "bold")
 LOG_FONT = ("Consolas", 9)
 
 
+class MaskPreview(tk.Toplevel):
+    def __init__(self, master, names):
+        super().__init__(master)
+        self.title("目标遮罩预览")
+        self.transient(master)
+        self.geometry("900x470")
+        self.minsize(660, 390)
+        self.variants = []
+        self.source = None
+        self.photos = []
+        self.images = []
+
+        body = ttk.Frame(self, padding=16)
+        body.pack(fill="both", expand=True)
+        controls = ttk.Frame(body)
+        controls.pack(fill="x", pady=(0, 12))
+        controls.columnconfigure(1, weight=1)
+        ttk.Label(controls, text="目标图片").grid(row=0, column=0, padx=(0, 8))
+        self.target = ttk.Combobox(controls, values=names, state="readonly", width=24)
+        self.target.grid(row=0, column=1, sticky="ew")
+        self.target.bind("<<ComboboxSelected>>", self.select_target)
+        ttk.Label(controls, text="模板尺寸").grid(row=0, column=2, padx=(16, 8))
+        self.variant = ttk.Combobox(controls, state="readonly", width=19)
+        self.variant.grid(row=0, column=3)
+        self.variant.bind("<<ComboboxSelected>>", self.select_variant)
+
+        bottom = ttk.Frame(body)
+        bottom.pack(side="bottom", fill="x", pady=(12, 0))
+        self.summary = ttk.Label(bottom, text="", wraplength=650)
+        self.summary.pack(side="left", fill="x", expand=True, padx=(0, 12))
+        ttk.Button(bottom, text="关闭", command=self.destroy).pack(side="right")
+
+        panels = ttk.Frame(body)
+        panels.pack(fill="both", expand=True)
+        self.canvases = []
+        for column, title in enumerate(("原图", "参与匹配的像素", "白色保留 · 红色排除")):
+            panels.columnconfigure(column, weight=1, uniform="preview")
+            panel = ttk.Frame(panels)
+            panel.grid(row=0, column=column, sticky="nsew", padx=(0 if column == 0 else 8, 0))
+            ttk.Label(panel, text=title, font=FONT_B).pack(anchor="w", pady=(0, 8))
+            canvas = tk.Canvas(panel, width=1, height=1, background="#e4e8ea",
+                               highlightthickness=1, highlightbackground="#c8d0d3")
+            canvas.pack(fill="both", expand=True)
+            canvas.bind("<Configure>", self.render)
+            self.canvases.append(canvas)
+        panels.rowconfigure(0, weight=1)
+
+        self.bind("<Escape>", lambda event: self.destroy())
+        self.bind("<Destroy>", self.on_destroy)
+        self.target.current(0)
+        self.select_target()
+        self.grab_set()
+
+    def on_destroy(self, event):
+        if event.widget == self:
+            self.master.settings_open = False
+
+    def select_target(self, event=None):
+        try:
+            with Image.open(os.path.join(mcb.TARGET_DIR, self.target.get())) as source:
+                self.source = source.convert("RGBA")
+            self.variants = mcb.build_variants(self.source)
+        except (OSError, ValueError) as error:
+            self.variants = []
+            self.images = []
+            self.variant.set("")
+            self.variant.configure(values=())
+            self.summary.configure(text=f"图片读取失败：{error}")
+            self.render()
+            return
+        self.variant.configure(values=[f"{w} × {h}" + ("（原尺寸）" if index == 0 else "")
+            for index, (h, w, *_rest) in enumerate(self.variants)])
+        self.variant.current(0)
+        self.select_variant()
+
+    def select_variant(self, event=None):
+        index = self.variant.current()
+        if index < 0 or not self.variants:
+            return
+        h, w, _gray, mask, rgb = self.variants[index]
+        original = self.source.resize((w, h), Image.NEAREST if w > self.source.width else Image.BOX)
+        kept = Image.fromarray(rgb.astype(np.uint8)).convert("RGBA")
+        kept.putalpha(Image.fromarray(mask.astype(np.uint8) * 255))
+        marked = np.empty((h, w, 3), dtype=np.uint8)
+        marked[mask] = (255, 255, 255)
+        marked[~mask] = (191, 57, 75)
+        self.images = [original, kept, Image.fromarray(marked)]
+        count = int(mask.sum())
+        total = mask.size
+        text = f"保留 {count:,} / {total:,} 像素（{count / total:.1%}）    排除 {total - count:,} 像素"
+        if count == total:
+            text += "\n当前模板保留全部像素"
+        self.summary.configure(text=text)
+        self.render()
+
+    def render(self, event=None):
+        self.photos = []
+        for index, canvas in enumerate(self.canvases):
+            canvas.delete("all")
+            if not self.images:
+                continue
+            image = self.images[index]
+            width, height = canvas.winfo_width(), canvas.winfo_height()
+            scale = min(max(1, width - 24) / image.width, max(1, height - 24) / image.height)
+            if scale >= 1:
+                scale = max(1, int(scale))
+            size = (max(1, int(image.width * scale)), max(1, int(image.height * scale)))
+            enlarged = image.resize(size, Image.NEAREST).convert("RGBA")
+            rows, columns = np.indices((size[1], size[0]))
+            checker = np.where(((rows // 8 + columns // 8) % 2)[..., None],
+                               np.array([218, 224, 227], dtype=np.uint8),
+                               np.array([247, 249, 250], dtype=np.uint8))
+            background = Image.fromarray(checker.astype(np.uint8)).convert("RGBA")
+            background.alpha_composite(enlarged)
+            photo = ImageTk.PhotoImage(background)
+            self.photos.append(photo)
+            canvas.create_image(width // 2, height // 2, image=photo, anchor="center")
+
+
 class Overlay:
     """全屏半透明遮罩，用 grab_set 抢输入，保证拖框一定生效。"""
 
@@ -289,12 +408,16 @@ class App(tk.Tk):
         ttk.Button(row, text="＋ 添加图片", command=self.add_image).pack(side="left")
         ttk.Button(row, text="截取目标", command=self.grab_target).pack(side="left", padx=6)
         ttk.Button(row, text="点选目标", command=self.pick_item_click).pack(side="left")
+        self.btn_mask = ttk.Button(row, text="预览遮罩", command=self.preview_mask, state="disabled")
+        self.btn_mask.pack(side="left", padx=6)
         ttk.Button(row, text="移除选中", command=self.remove_targets).pack(side="right")
         self.target_tree = ttk.Treeview(targets_tab, columns=("size",), show="tree headings", selectmode="extended", height=4)
         self.target_tree.heading("#0", text="目标图片")
         self.target_tree.heading("size", text="尺寸")
         self.target_tree.column("#0", width=400, minwidth=180)
         self.target_tree.column("size", width=100, stretch=False, anchor="center")
+        self.target_tree.bind("<<TreeviewSelect>>", self.update_mask_button)
+        self.target_tree.bind("<Double-1>", lambda event: self.preview_mask())
         scroll = ttk.Scrollbar(targets_tab, orient="vertical", command=self.target_tree.yview)
         self.target_tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
@@ -480,8 +603,26 @@ class App(tk.Tk):
             self.lbl_macro.config(text="未录制", foreground="#6b7280")
 
         self.refresh_window_status()
+        self.update_mask_button()
 
     # -------------------------------------------------------------- actions
+    def update_mask_button(self, event=None):
+        self.btn_mask.configure(state="normal" if self.target_tree.selection() else "disabled")
+
+    def preview_mask(self):
+        if self.settings_open or self.recording or self.calibrating or self.worker and self.worker.is_alive():
+            self.log("请先结束当前操作，再预览遮罩", "warn")
+            return
+        names = self.target_tree.selection()
+        if not names:
+            return
+        self.settings_open = True
+        try:
+            MaskPreview(self, names)
+        except Exception:
+            self.settings_open = False
+            raise
+
     def refresh_window_status(self):
         hwnd = mcb.find_game_window(self.cfg.get("window_title", ""))
         info = mcb.window_details(hwnd) if hwnd else {}

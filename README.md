@@ -8,7 +8,7 @@ Windows 桌面工具，用截图和 RGB 模板匹配识别 Minecraft Alex’s Mo
 
 ## 一键运行
 
-1. 在 [Releases](https://github.com/MyRemme/mc-transmute-bot/releases/latest) 下载 `mc-transmute-bot-1.1.2-windows-x64.zip`。
+1. 在 [Releases](https://github.com/MyRemme/mc-transmute-bot/releases/latest) 下载 `mc-transmute-bot-1.1.3-windows-x64.zip`。
 2. 将压缩包完整解压到有写入权限的文件夹，双击 `嬗变台自动刷取.exe`。
 3. 打开 Minecraft，按下面的说明选择窗口、添加目标并标定候选。
 
@@ -39,6 +39,10 @@ python gui.py
 “标定刷新点”可覆盖默认刷新位置，适用于布局经过修改的整合包。目标库中的任意图片命中都能结束自动刷取。
 
 目标列表支持滚动、多选移除和彩色预览。模板会适配多种 GUI 缩放，改变 GUI 布局后应重新标定。
+
+选中目标图片后点击“预览遮罩”，或双击目标行，查看原图、参与匹配的像素和遮罩。遮罩中白色表示保留，红色表示排除，棋盘格表示透明区域。多选后可在预览窗口切换目标，也可切换查看不同尺寸的模板，并查看保留像素数量及比例。
+
+检查物品是否完整保留、槽位背景和边框是否被排除。若出现误删或背景残留，重新截取目标图后再次预览。预览显示模板的像素遮罩，当前游戏候选的命中情况可通过“测试识别”查看。
 
 ![标定、参数与窗口设置](docs/settings_preview.png)
 
