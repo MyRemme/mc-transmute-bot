@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-gui.py — 嬗变台自动刷 图形界面
+gui.py — 嬗变台自动刷取 图形界面
 
 双击 gui.bat 或 python gui.py 打开。所有操作都在窗口里点点点，不用命令行。
 """
@@ -12,6 +12,8 @@ import queue
 import threading
 import time
 import tkinter as tk
+import traceback
+import webbrowser
 from tkinter import filedialog, messagebox, ttk
 
 import numpy as np
@@ -176,9 +178,12 @@ class Overlay:
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("嬗变台自动刷")
+        self.title(mcb.APP_NAME)
+        self.app_icon = tk.PhotoImage(file=os.path.join(mcb.RESOURCE_DIR, "assets", "app.png"))
+        self.iconphoto(True, self.app_icon)
+        self.iconbitmap(default=os.path.join(mcb.RESOURCE_DIR, "assets", "app.ico"))
         self.geometry("900x760+80+60")
-        self.minsize(760, 640)
+        self.minsize(760, 700)
         self.configure(bg="#f4f6f7")
 
         self.cfg = mcb.load_cfg()
@@ -189,6 +194,7 @@ class App(tk.Tk):
         self.recording = False
         self.settings_open = False
         self.calibrating = False
+        self._window_check_at = 0.0
         self.protocol("WM_DELETE_WINDOW", self.close)
 
         self._build()
@@ -213,9 +219,18 @@ class App(tk.Tk):
 
         head = tk.Frame(self, bg="#20292c")
         head.pack(fill="x")
-        tk.Label(head, text="嬗变台自动刷", font=FONT_T, fg="white", bg="#20292c").pack(side="left", padx=18, pady=14)
+        tk.Label(head, text=mcb.APP_NAME, font=FONT_T, fg="white", bg="#20292c").pack(side="left", padx=18, pady=14)
         self.lbl_win = tk.Label(head, text="", font=FONT, fg="#b7d9cf", bg="#20292c")
         self.lbl_win.pack(side="right", padx=18)
+
+        footer = ttk.Frame(self, padding=(16, 0, 16, 8))
+        footer.pack(side="bottom", fill="x")
+        ttk.Label(footer, text=f"MyRemme · v{mcb.APP_VERSION}", foreground="#59696d").pack(side="left")
+        for label, url in (("GitHub 仓库", mcb.REPO_URL), ("B站主页", mcb.BILIBILI_URL)):
+            link = ttk.Label(footer, text=label, foreground="#157d70", cursor="hand2", takefocus=True)
+            link.pack(side="right", padx=(16, 0))
+            link.bind("<Button-1>", lambda event, address=url: webbrowser.open(address))
+            link.bind("<Return>", lambda event, address=url: webbrowser.open(address))
 
         body = ttk.Frame(self, padding=16)
         body.pack(fill="both", expand=True)
@@ -292,6 +307,15 @@ class App(tk.Tk):
         ttk.Button(row, text="试听成功提示音", command=lambda: mcb.success_sound(self.cfg)).pack(side="left", padx=8)
         self.lbl_hotkeys = ttk.Label(settings_tab, text="", foreground="#59696d", wraplength=650)
         self.lbl_hotkeys.pack(anchor="w", pady=4)
+
+        windowbar = ttk.Frame(settings_tab)
+        windowbar.pack(fill="x", pady=(12, 6))
+        ttk.Label(windowbar, text="游戏窗口", font=FONT_B).pack(side="left")
+        ttk.Button(windowbar, text="手动选择", command=self.choose_window).pack(side="right")
+        ttk.Button(windowbar, text="自动识别", command=self.auto_window).pack(side="right", padx=6)
+        self.lbl_window_detail = ttk.Label(settings_tab, text="", wraplength=650,
+                                           foreground="#59696d")
+        self.lbl_window_detail.pack(anchor="w")
 
         self.var_auto = tk.BooleanVar(value=True)
         ttk.Checkbutton(advanced_tab, text="自动模式", variable=self.var_auto).pack(anchor="w", pady=(0, 10))
@@ -389,6 +413,9 @@ class App(tk.Tk):
                         self._slot_hud = None
         except queue.Empty:
             pass
+        if time.monotonic() >= self._window_check_at:
+            self.refresh_window_status()
+            self._window_check_at = time.monotonic() + 2.0
         self.after(80, self._drain)
 
     def refresh(self):
@@ -425,13 +452,124 @@ class App(tk.Tk):
         else:
             self.lbl_macro.config(text="未录制", foreground="#6b7280")
 
-        hwnd = mcb.find_game_window(self.cfg.get("window_title", ""))
-        if hwnd:
-            self.lbl_win.config(text="● 已找到游戏窗口", fg="#4ade80")
-        else:
-            self.lbl_win.config(text="○ 未找到游戏（java.exe）", fg="#f87171")
+        self.refresh_window_status()
 
     # -------------------------------------------------------------- actions
+    def refresh_window_status(self):
+        hwnd = mcb.find_game_window(self.cfg.get("window_title", ""))
+        info = mcb.window_details(hwnd) if hwnd else {}
+        selection = self.cfg.get("selected_window")
+        if info:
+            mode = "已选定" if selection else "自动识别"
+            title = info["title"]
+            short_title = title if len(title) <= 30 else title[:29] + "…"
+            self.lbl_win.config(text=f"● {mode} · {short_title}", fg="#4ade80")
+            self.lbl_window_detail.config(text=f"{mode}  {title}\n{info['exe']} · PID {info['pid']} · HWND {hwnd}")
+        else:
+            self.lbl_win.config(text="○ 请重新选择游戏窗口" if selection else "○ 未找到游戏窗口", fg="#f87171")
+            self.lbl_window_detail.config(text="选定的窗口已关闭，请重新选择。" if selection else "尚未检测到 Java / LWJGL 游戏窗口。")
+
+    def _can_select_window(self):
+        if self.settings_open or self.recording or self.calibrating or self.worker and self.worker.is_alive():
+            self.log("请先结束当前操作，再选择游戏窗口", "warn")
+            return False
+        return True
+
+    def _bind_window(self, info):
+        current = mcb.window_details(info["hwnd"])
+        identity = ("pid", "started", "exe", "class")
+        if not current or any(current[key] != info[key] for key in identity):
+            messagebox.showwarning("窗口已关闭", "该窗口已不可用，请刷新列表后重新选择")
+            return False
+        previous = mcb.find_game_window(self.cfg.get("window_title", ""))
+        cfg = mcb.load_cfg()
+        cfg["selected_window"] = {key: current[key] for key in ("hwnd", "title") + identity}
+        if previous != current["hwnd"]:
+            for key in ("slots", "slots_norm", "watch_norm", "refill", "refill_norm", "client_at_mark"):
+                cfg.pop(key, None)
+            cfg["watch"] = [0, 0, 0, 0]
+        mcb.save_cfg(cfg)
+        mcb.set_window_selection(cfg["selected_window"])
+        self.refresh()
+        self.log(f"已选定 {current['title']}（{current['exe']}，PID {current['pid']}）", "ok")
+        if previous != current["hwnd"]:
+            self.log("已切换窗口，请重新标定左侧三个候选", "warn")
+        return True
+
+    def auto_window(self):
+        if not self._can_select_window():
+            return
+        candidates = mcb.available_game_windows(self.cfg.get("window_title", ""))
+        if not candidates:
+            self.log("没有找到 Java / LWJGL 游戏窗口，请先打开 Minecraft", "warn")
+        elif len(candidates) == 1:
+            self._bind_window(candidates[0])
+        else:
+            self.choose_window()
+
+    def choose_window(self):
+        if not self._can_select_window():
+            return
+        self.settings_open = True
+        top = tk.Toplevel(self)
+        top.title("选择游戏窗口")
+        top.geometry("760x330")
+        top.minsize(600, 280)
+        top.transient(self)
+        body = ttk.Frame(top, padding=12)
+        body.pack(fill="both", expand=True)
+        controls = ttk.Frame(body)
+        controls.pack(side="bottom", fill="x")
+        status = ttk.Label(body, text="", foreground="#59696d")
+        status.pack(side="bottom", anchor="w", pady=8)
+        listing = ttk.Frame(body)
+        listing.pack(fill="both", expand=True)
+        tree = ttk.Treeview(listing, columns=("exe", "pid"), show="tree headings", selectmode="browse", height=4)
+        tree.heading("#0", text="窗口标题")
+        tree.heading("exe", text="进程")
+        tree.heading("pid", text="PID")
+        tree.column("#0", width=420, minwidth=200)
+        tree.column("exe", width=100, stretch=False)
+        tree.column("pid", width=80, stretch=False)
+        scroll = ttk.Scrollbar(listing, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        tree.pack(fill="both", expand=True)
+        candidates = {}
+
+        def reload():
+            children = tree.get_children()
+            if children:
+                tree.delete(*children)
+            candidates.clear()
+            for info in mcb.available_game_windows(self.cfg.get("window_title", "")):
+                key = str(info["hwnd"])
+                candidates[key] = info
+                tree.insert("", "end", iid=key, text=info["title"], values=(info["exe"], info["pid"]))
+            children = tree.get_children()
+            if children:
+                tree.selection_set(children[0])
+            status.config(text=f"{len(candidates)} 个 Java / LWJGL 候选窗口")
+
+        def close():
+            self.settings_open = False
+            top.destroy()
+
+        def select(event=None):
+            selected = tree.selection()
+            if selected and self._bind_window(candidates[selected[0]]):
+                close()
+
+        ttk.Button(controls, text="刷新列表", command=reload).pack(side="left")
+        ttk.Button(controls, text="选定窗口", command=select).pack(side="right")
+        ttk.Button(controls, text="取消", command=close).pack(side="right", padx=6)
+        tree.bind("<Double-1>", select)
+        top.bind("<Return>", select)
+        top.bind("<Escape>", lambda event: close())
+        top.protocol("WM_DELETE_WINDOW", close)
+        reload()
+        top.grab_set()
+
     def open_settings(self):
         if self.settings_open:
             return
@@ -1039,8 +1177,19 @@ class App(tk.Tk):
 
 
 def main():
-    app = App()
-    app.mainloop()
+    try:
+        app = App()
+        app.mainloop()
+    except Exception as error:
+        detail = traceback.format_exc()
+        log_path = os.path.join(mcb.HERE, "startup-error.log")
+        try:
+            with open(log_path, "w", encoding="utf-8") as stream:
+                stream.write(detail)
+        except OSError:
+            log_path = "无法写入日志，请检查目录写入权限"
+        messagebox.showerror("启动失败", f"{type(error).__name__}: {error}\n\n{log_path}")
+        raise
 
 
 if __name__ == "__main__":

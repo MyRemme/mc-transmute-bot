@@ -13,6 +13,10 @@ screen.png
 _pick_tmp.png
 docs/*
 !docs/ui_preview.png
+!docs/window_selection.png
+!docs/settings_preview.png
+build/
+dist/
 *.log
 .env
 .env.*

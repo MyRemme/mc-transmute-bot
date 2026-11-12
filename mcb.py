@@ -40,7 +40,12 @@ try:
 except Exception:
     pass
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+RESOURCE_DIR = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else RESOURCE_DIR
+APP_VERSION = "1.1.0"
+APP_NAME = "嬗变台自动刷取"
+REPO_URL = "https://github.com/MyRemme/mc-transmute-bot"
+BILIBILI_URL = "https://space.bilibili.com/1746890498"
 CFG_PATH = os.path.join(HERE, "config.json")
 TARGET_DIR = os.path.join(HERE, "targets")
 MACRO_DIR = os.path.join(HERE, "macros")
@@ -84,7 +89,9 @@ def success_sound(cfg=None):
     import winsound
     cfg = cfg or load_cfg()
     path = cfg.get("success_sound", DEFAULT_CFG["success_sound"])
-    path = path if os.path.isabs(path) else os.path.join(HERE, path)
+    if not os.path.isabs(path):
+        local_path = os.path.join(HERE, path)
+        path = local_path if os.path.exists(local_path) else os.path.join(RESOURCE_DIR, path)
     try:
         winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
     except RuntimeError as error:
@@ -127,7 +134,8 @@ def load_cfg() -> dict:
 
 def save_cfg(cfg: dict) -> None:
     import tempfile
-    fd, temporary = tempfile.mkstemp(prefix=".config-", suffix=".tmp", dir=HERE)
+    fd, temporary = tempfile.mkstemp(prefix=".config-", suffix=".tmp",
+                                     dir=os.path.dirname(os.path.abspath(CFG_PATH)))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(cfg, stream, ensure_ascii=False, indent=2)
@@ -291,23 +299,33 @@ def list_windows(sub: str = "") -> list[str]:
     return out
 
 
-def _win_exe(hwnd) -> str:
-    """取窗口所属进程的 exe 名。整合包会把窗口标题改掉，只能靠 java.exe 认。"""
+def _win_process(hwnd) -> tuple[str, int]:
+    """Read the executable and creation time to distinguish recycled process IDs."""
     u = ctypes.windll.user32
     k = ctypes.windll.kernel32
     pid = wt.DWORD()
     u.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
     hp = k.OpenProcess(0x1000, False, pid.value)
     if not hp:
-        return ""
+        return "", 0
     try:
         buf = ctypes.create_unicode_buffer(512)
         n = wt.DWORD(512)
+        exe = ""
         if k.QueryFullProcessImageNameW(hp, 0, buf, ctypes.byref(n)):
-            return buf.value.split("\\")[-1].lower()
-        return ""
+            exe = os.path.basename(buf.value).lower()
+        created, exited, kernel, user = (wt.FILETIME() for _ in range(4))
+        started = 0
+        if k.GetProcessTimes(hp, ctypes.byref(created), ctypes.byref(exited),
+                             ctypes.byref(kernel), ctypes.byref(user)):
+            started = (created.dwHighDateTime << 32) | created.dwLowDateTime
+        return exe, started
     finally:
         k.CloseHandle(hp)
+
+
+def _win_exe(hwnd) -> str:
+    return _win_process(hwnd)[0]
 
 
 def _decl() -> None:
@@ -318,12 +336,16 @@ def _decl() -> None:
     k.QueryFullProcessImageNameW.argtypes = [wt.HANDLE, wt.DWORD, wt.LPWSTR,
                                           ctypes.POINTER(wt.DWORD)]
     k.CloseHandle.argtypes = [wt.HANDLE]
+    k.GetProcessTimes.argtypes = [wt.HANDLE] + [ctypes.POINTER(wt.FILETIME)] * 4
     u.WindowFromPoint.argtypes = [wt.POINT]
     u.WindowFromPoint.restype = wt.HWND
     u.GetAncestor.argtypes = [wt.HWND, ctypes.c_uint]
     u.GetAncestor.restype = wt.HWND
     u.ShowWindow.argtypes = [wt.HWND, ctypes.c_int]
     u.IsWindow.argtypes = [wt.HWND]
+    u.IsWindowVisible.argtypes = [wt.HWND]
+    u.GetWindowThreadProcessId.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
+    u.GetClassNameW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
     u.SetForegroundWindow.argtypes = [wt.HWND]
     u.BringWindowToTop.argtypes = [wt.HWND]
     u.IsIconic.argtypes = [wt.HWND]
@@ -336,52 +358,97 @@ def _decl() -> None:
 
 
 _WINDOW_CACHE = {}
+_WINDOW_SELECTION = None
+_WINDOW_CONFIG_LOADED = False
 
 
-def find_game_window(title_sub: str = "") -> int:
-    """按 exe(java/javaw) 或标题找游戏主窗口，返回 hwnd（0=没找到）。"""
+def window_details(hwnd) -> dict:
     _decl()
     u = ctypes.windll.user32
-    cached = _WINDOW_CACHE.get(title_sub)
-    if cached and time.monotonic() < cached[1] and u.IsWindow(cached[0]):
-        return cached[0]
-    cands = []
+    if not u.IsWindow(hwnd):
+        return {}
+    title = ctypes.create_unicode_buffer(u.GetWindowTextLengthW(hwnd) + 1)
+    u.GetWindowTextW(hwnd, title, len(title))
+    classname = ctypes.create_unicode_buffer(256)
+    u.GetClassNameW(hwnd, classname, len(classname))
+    pid = wt.DWORD()
+    u.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    rect = wt.RECT()
+    u.GetWindowRect(hwnd, ctypes.byref(rect))
+    exe, started = _win_process(hwnd)
+    return {"hwnd": int(hwnd), "pid": pid.value, "started": started,
+            "title": title.value, "exe": exe, "class": classname.value,
+            "width": rect.right - rect.left, "height": rect.bottom - rect.top}
+
+
+def available_game_windows(title_sub: str = "") -> list[dict]:
+    """List Java/LWJGL game candidates, ranked by class and title evidence."""
+    _decl()
+    u = ctypes.windll.user32
+    candidates = []
 
     @ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
     def cb(hwnd, _):
         if not u.IsWindowVisible(hwnd):
             return True
-        r = wt.RECT()
-        u.GetWindowRect(hwnd, ctypes.byref(r))
-        w, h = r.right - r.left, r.bottom - r.top
-        # 最小化的窗口只有 160x28，不能按尺寸过滤掉
-        if not u.IsIconic(hwnd) and (w < 600 or h < 400):
+        info = window_details(hwnd)
+        if not info or not info["title"]:
             return True
-        exe = _win_exe(hwnd)
-        n = u.GetWindowTextLengthW(hwnd)
-        buf = ctypes.create_unicode_buffer(n + 1)
-        u.GetWindowTextW(hwnd, buf, n + 1)
-        title = buf.value
-        score = 0
-        if exe in ("java.exe", "javaw.exe"):
-            score += 10
-        if title_sub and title_sub.lower() in title.lower():
-            score += 5
-        if "minecraft" in title.lower():
-            score += 5
-        if score:
-            cands.append((score, w * h, hwnd, title, exe))
+        if not u.IsIconic(hwnd) and (info["width"] < 300 or info["height"] < 200):
+            return True
+        java = info["exe"] in ("java.exe", "javaw.exe")
+        lwjgl = info["class"].lower() in ("glfw30", "lwjgl")
+        if java or lwjgl:
+            title = info["title"].lower()
+            info["score"] = (10 * java + 10 * lwjgl + 5 * ("minecraft" in title)
+                             + 5 * bool(title_sub and title_sub.lower() in title))
+            candidates.append(info)
         return True
 
     try:
         u.EnumWindows(cb, 0)
     except Exception:
+        return []
+    candidates.sort(key=lambda item: (item["score"], item["width"] * item["height"]),
+                    reverse=True)
+    return candidates
+
+
+def set_window_selection(selection):
+    global _WINDOW_SELECTION, _WINDOW_CONFIG_LOADED
+    _WINDOW_SELECTION = dict(selection) if selection else None
+    _WINDOW_CONFIG_LOADED = True
+    _WINDOW_CACHE.clear()
+
+
+def _selected_window_handle(selection) -> int:
+    """Require the original window and process, including its creation time."""
+    info = window_details(selection.get("hwnd", 0))
+    keys = ("pid", "started", "exe", "class")
+    if info and all(info[key] == selection.get(key) for key in keys):
+        return info["hwnd"]
+    return 0
+
+
+def find_game_window(title_sub: str = "") -> int:
+    """Resolve the bound window, or use automatic detection before selection."""
+    global _WINDOW_CONFIG_LOADED
+    _decl()
+    if not _WINDOW_CONFIG_LOADED:
+        cfg = load_cfg()
+        set_window_selection(cfg.get("selected_window"))
+    if _WINDOW_SELECTION:
+        return _selected_window_handle(_WINDOW_SELECTION)
+    u = ctypes.windll.user32
+    cached = _WINDOW_CACHE.get(title_sub)
+    if cached and time.monotonic() < cached[1] and u.IsWindow(cached[0]):
+        return cached[0]
+    candidates = available_game_windows(title_sub)
+    if not candidates:
         return 0
-    if not cands:
-        return 0
-    cands.sort(reverse=True)
-    _WINDOW_CACHE[title_sub] = (cands[0][2], time.monotonic() + 1.0)
-    return cands[0][2]
+    hwnd = candidates[0]["hwnd"]
+    _WINDOW_CACHE[title_sub] = (hwnd, time.monotonic() + 1.0)
+    return hwnd
 
 
 def beep(times: int = 1) -> None:
@@ -440,7 +507,7 @@ def game_ready() -> tuple[bool, str]:
     u = ctypes.windll.user32
     hwnd = find_game_window("")
     if not hwnd:
-        return False, "没找到游戏窗口（java.exe 没在跑？）"
+        return False, "目标窗口不可用，请在“标定与设置”中自动识别或手动选择游戏窗口"
     if u.IsIconic(hwnd):
         return False, "游戏窗口被最小化了 —— 请先点开它"
     cb = client_box(hwnd)
@@ -461,7 +528,7 @@ def capture_game(bbox=None):
     u, g = ctypes.windll.user32, ctypes.windll.gdi32
     hwnd = find_game_window("")
     if not hwnd or u.IsIconic(hwnd):
-        raise RuntimeError("请先打开 Minecraft 游戏窗口")
+        raise RuntimeError("目标窗口不可用或已最小化，请打开游戏并重新选择窗口")
     cb = client_box(hwnd)
     if not cb:
         raise RuntimeError("无法获取游戏窗口客户区")
@@ -1484,7 +1551,7 @@ def _take(cfg, b, best) -> None:
 def cmd_quick(args) -> None:
     cfg = load_cfg()
     log("=" * 56)
-    log(" 嬗变台自动刷 · 向导")
+    log(f" {APP_NAME} · 向导")
     log("=" * 56)
 
     if not args.skip_region or cfg["watch"][2] <= cfg["watch"][0]:
@@ -1551,7 +1618,7 @@ def cmd_doctor(args) -> None:
         lines.append(s)
 
     p("=" * 60)
-    p(" 嬗变台自动刷 · 环境体检")
+    p(f" {APP_NAME} · 环境体检")
     p("=" * 60)
     p(f"Python      : {sys.executable}")
     p(f"版本        : {sys.version.split()[0]}  ({'64' if sys.maxsize > 2**32 else '32'} 位)")
@@ -1799,7 +1866,7 @@ def main() -> None:
     # 直接双击 mcb.py 时会走到这里（无参数）——给个提示并停住，别一闪而过
     if len(sys.argv) == 1:
         print("=" * 56)
-        print(" 嬗变台自动刷")
+        print(f" {APP_NAME}")
         print("=" * 56)
         print(" 第一次用，直接双击「启动.bat」或「run.bat」就行。")
         print("")

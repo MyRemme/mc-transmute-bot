@@ -13,6 +13,33 @@ import mcb
 from hotkeys import ChordTracker, key_identity, key_token, normalize
 
 
+class WindowSelectionTests(unittest.TestCase):
+    def setUp(self):
+        self.selection = {"hwnd": 123, "pid": 456, "started": 789,
+                          "exe": "javaw.exe", "class": "GLFW30"}
+
+    def test_selected_window_accepts_title_changes(self):
+        current = {**self.selection, "title": "Changed modpack title"}
+        with patch.object(mcb, "window_details", return_value=current):
+            self.assertEqual(mcb._selected_window_handle(self.selection), 123)
+
+    def test_selected_window_rejects_reused_handle_or_process(self):
+        for changed in ({"pid": 999}, {"started": 999}, {"exe": "other.exe"},
+                        {"class": "OtherClass"}):
+            with self.subTest(changed=changed), \
+                    patch.object(mcb, "window_details", return_value={**self.selection, **changed}):
+                self.assertEqual(mcb._selected_window_handle(self.selection), 0)
+
+    def test_closed_selected_window_never_falls_back_to_another_game(self):
+        with patch.object(mcb, "_WINDOW_CONFIG_LOADED", True), \
+                patch.object(mcb, "_WINDOW_SELECTION", self.selection), \
+                patch.object(mcb, "_decl"), \
+                patch.object(mcb, "window_details", return_value={}), \
+                patch.object(mcb, "available_game_windows") as automatic:
+            self.assertEqual(mcb.find_game_window(), 0)
+        automatic.assert_not_called()
+
+
 class HotkeyTests(unittest.TestCase):
     def test_watch_uses_configured_stop_chord(self):
         cfg = {**mcb.DEFAULT_CFG, "watch": [0, 0, 96, 96],
