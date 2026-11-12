@@ -14,6 +14,23 @@ from hotkeys import ChordTracker, key_identity, key_token, normalize
 
 
 class HotkeyTests(unittest.TestCase):
+    def test_watch_uses_configured_stop_chord(self):
+        cfg = {**mcb.DEFAULT_CFG, "watch": [0, 0, 96, 96],
+               "hotkeys": {"stop": "ctrl+shift+q"}}
+        with patch.object(mcb, "load_cfg", return_value=cfg), \
+                patch.object(mcb, "load_targets", return_value=[object()]), \
+                patch.object(mcb, "InputListener") as listener, \
+                patch.object(mcb, "grab") as grab, patch.object(mcb, "log"):
+            def start_listener():
+                listener.call_args.args[1]("stop")
+                return listener.return_value
+
+            listener.return_value.start.side_effect = start_listener
+            mcb.cmd_watch(None)
+        self.assertEqual(listener.call_args.args[0], {"stop": "ctrl+shift+q"})
+        listener.return_value.stop.assert_called_once()
+        grab.assert_not_called()
+
     def test_letters_modifiers_and_mouse_normalization(self):
         self.assertEqual(normalize("Control + Shift + A"), "ctrl+shift+a")
         self.assertEqual(normalize("alt+mouse_x1"), "alt+mouse_x1")

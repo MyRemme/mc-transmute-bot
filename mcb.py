@@ -74,7 +74,7 @@ DEFAULT_CFG = {
 
 
 def hk(cfg, name: str) -> str:
-    """取配置里的热键名（pynput 的 key.name，如 f9 / space）。"""
+    """取配置里的单键或组合快捷键。"""
     h = (cfg or {}).get("hotkeys") or {}
     return str(h.get(name) or DEFAULT_CFG["hotkeys"][name]).lower()
 
@@ -1426,7 +1426,8 @@ def cmd_run(args) -> None:
     state = {"stop": False, "paused": False}
     kl = _hotkey_listener(state, cfg)
     log(f"开始 | 阈值 {cfg['threshold']:.2f} | 倍速 {cfg.get('speed', 1.3)} | "
-        f"模板 {[t[0] for t in targets]} | F9 暂停 / F10 停止")
+        f"模板 {[t[0] for t in targets]} | {hk(cfg, 'pause').upper()} 暂停 / "
+        f"{hk(cfg, 'stop').upper()} 停止")
 
     def prog(i, hits, rate, score, name):
         print(f"  第 {i} 轮 | {rate:.2f} 轮/秒 | 最高分 {score:.3f} {name[:16]}", flush=True)
@@ -1516,7 +1517,9 @@ def cmd_quick(args) -> None:
 
     if not load_macro("loop") or args.re_record:
         log("步骤 3/3：录一遍循环")
-        log("  按 F6 开始 → 做一遍（放物品/转/结果出现时按 F11）→ 按 F7 结束")
+        log(f"  按 {hk(cfg, 'record_start').upper()} 开始 → 做一遍"
+            f"（放物品/转/结果出现时按 {hk(cfg, 'record_mark').upper()}）"
+            f"→ 按 {hk(cfg, 'record_stop').upper()} 结束")
         ns = argparse.Namespace(name="loop")
         cmd_record(ns)
     else:
@@ -1526,7 +1529,8 @@ def cmd_quick(args) -> None:
         log("附加：框一块 GUI 特征区域防点穿")
         cmd_guard(None)
 
-    log("准备就绪，3 秒后开刷（F9 暂停 / F10 停止）")
+    log(f"准备就绪，3 秒后开刷（{hk(cfg, 'pause').upper()} 暂停 / "
+        f"{hk(cfg, 'stop').upper()} 停止）")
     time.sleep(3)
     run_args = argparse.Namespace(
         passes=args.passes, threshold=args.threshold, settle=None, speed=args.speed,
@@ -1731,17 +1735,14 @@ def cmd_watch(args) -> None:
     if b[2] <= b[0]:
         log("先跑 region")
         return
-    from pynput import keyboard
     state = {"stop": False}
 
-    def on_press(key):
-        if getattr(key, "name", "") == "f10":
-            state["stop"] = True
-            return False
+    def action(name):
+        state["stop"] = True
 
-    kl = keyboard.Listener(on_press=on_press)
-    kl.start()
-    log(f"实时匹配（{len(targets)} 个模板，阈值 {cfg['threshold']}），F10 退出")
+    kl = InputListener({"stop": hk(cfg, "stop")}, action).start()
+    log(f"实时匹配（{len(targets)} 个模板，阈值 {cfg['threshold']}），"
+        f"{hk(cfg, 'stop').upper()} 退出")
     try:
         while not state["stop"]:
             gray, img = grab(tuple(b))
