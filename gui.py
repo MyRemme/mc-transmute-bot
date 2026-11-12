@@ -8,6 +8,8 @@ gui.py — 嬗变台自动刷取 图形界面
 from __future__ import annotations
 
 import os
+import ctypes
+import ctypes.wintypes as wt
 import queue
 import threading
 import time
@@ -25,7 +27,7 @@ from hotkeys import InputListener, format_tokens, key_identity, key_token, norma
 NL = chr(10)
 FONT = ("Microsoft YaHei UI", 10)
 FONT_B = ("Microsoft YaHei UI", 10, "bold")
-FONT_T = ("Microsoft YaHei UI", 15, "bold")
+FONT_T = ("Microsoft YaHei UI", 11, "bold")
 LOG_FONT = ("Consolas", 9)
 
 
@@ -181,7 +183,9 @@ class App(tk.Tk):
         self.title(mcb.APP_NAME)
         self.app_icon = tk.PhotoImage(file=os.path.join(mcb.RESOURCE_DIR, "assets", "app.png"))
         self.iconphoto(True, self.app_icon)
-        self.iconbitmap(default=os.path.join(mcb.RESOURCE_DIR, "assets", "app.ico"))
+        self.iconbitmap(os.path.join(mcb.RESOURCE_DIR, "assets", "app.ico"))
+        self._native_icons = []
+        self.after_idle(self._apply_window_icon)
         self.geometry("900x760+80+60")
         self.minsize(760, 700)
         self.configure(bg="#f4f6f7")
@@ -203,6 +207,24 @@ class App(tk.Tk):
         self._start_hotkeys()
         self.log("接手前请先投料并手动刷新一次。自动模式从当前左侧三个候选开始检查。")
 
+    def _apply_window_icon(self):
+        user = ctypes.windll.user32
+        user.GetAncestor.argtypes = [wt.HWND, wt.UINT]
+        user.GetAncestor.restype = wt.HWND
+        user.LoadImageW.argtypes = [wt.HINSTANCE, wt.LPCWSTR, wt.UINT,
+                                    ctypes.c_int, ctypes.c_int, wt.UINT]
+        user.LoadImageW.restype = wt.HANDLE
+        user.SendMessageW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+        user.SendMessageW.restype = wt.LPARAM
+        hwnd = user.GetAncestor(self.winfo_id(), 2)
+        path = os.path.join(mcb.RESOURCE_DIR, "assets", "app.ico")
+        for kind, metric in ((0, 49), (1, 11)):
+            size = user.GetSystemMetrics(metric)
+            icon = user.LoadImageW(None, path, 1, size, size, 0x10)
+            if icon:
+                self._native_icons.append(icon)
+                user.SendMessageW(hwnd, 0x0080, kind, icon)
+
     # ------------------------------------------------------------------ UI
     def _build(self):
         style = ttk.Style(self)
@@ -219,18 +241,23 @@ class App(tk.Tk):
 
         head = tk.Frame(self, bg="#20292c")
         head.pack(fill="x")
-        tk.Label(head, text=mcb.APP_NAME, font=FONT_T, fg="white", bg="#20292c").pack(side="left", padx=18, pady=14)
+        self.header_hint = tk.Label(head,
+            text="还在为嬗变台刷取发愁？担心刷过头、手动操作累？嬗变台自动刷取，一键搞定！",
+            font=FONT_T, fg="white", bg="#20292c", justify="left", anchor="w", wraplength=850)
+        self.header_hint.pack(fill="x", padx=18, pady=(12, 4))
+        head.bind("<Configure>", lambda event: self.header_hint.configure(wraplength=max(100, event.width - 36)))
         self.lbl_win = tk.Label(head, text="", font=FONT, fg="#b7d9cf", bg="#20292c")
-        self.lbl_win.pack(side="right", padx=18)
+        self.lbl_win.pack(anchor="e", padx=18, pady=(0, 8))
 
         footer = ttk.Frame(self, padding=(16, 0, 16, 8))
         footer.pack(side="bottom", fill="x")
         ttk.Label(footer, text=f"MyRemme · v{mcb.APP_VERSION}", foreground="#59696d").pack(side="left")
-        for label, url in (("GitHub 仓库", mcb.REPO_URL), ("B站主页", mcb.BILIBILI_URL)):
+        for label, url in (("☆ GitHub 仓库", mcb.REPO_URL), ("B站主页", mcb.BILIBILI_URL)):
             link = ttk.Label(footer, text=label, foreground="#157d70", cursor="hand2", takefocus=True)
             link.pack(side="right", padx=(16, 0))
             link.bind("<Button-1>", lambda event, address=url: webbrowser.open(address))
             link.bind("<Return>", lambda event, address=url: webbrowser.open(address))
+        ttk.Label(footer, text="觉得好用可以给我的仓库点Star", foreground="#59696d").pack(side="right", padx=(12, 0))
 
         body = ttk.Frame(self, padding=16)
         body.pack(fill="both", expand=True)
@@ -727,8 +754,8 @@ class App(tk.Tk):
         if not targets:
             messagebox.showwarning("还差一步", "先加一个目标物品图片")
             return
-        docs = os.path.join(mcb.HERE, "docs")
-        os.makedirs(docs, exist_ok=True)
+        debug = os.path.join(mcb.HERE, "debug")
+        os.makedirs(debug, exist_ok=True)
         thr = float(cfg.get("threshold", 0.9))
 
         try:
@@ -751,7 +778,7 @@ class App(tk.Tk):
             top = (-1.0, "", 0)
             for idx, (cx, cy) in enumerate(slots, 1):
                 img, _off = mcb.grab_patch(cx, cy, 48)
-                img.save(os.path.join(docs, f"slot_{idx}.png"))
+                img.save(os.path.join(debug, f"slot_{idx}.png"))
                 s, name, _pos, _sz = mcb.scan(
                     mcb._to_gray(img), targets, thr,
                     rgb=np.asarray(img.convert("RGB"), dtype=np.float32))
@@ -763,7 +790,7 @@ class App(tk.Tk):
             tag = "ok" if top[0] >= thr else "warn"
             self.log(f"最高 {top[0]:.3f} 在槽位{top[2]}  阈值 {thr:.2f} → "
                      + ("检测到目标 ✓" if top[0] >= thr else "当前槽位未检测到目标"), tag)
-            self.log(f"{len(slots)} 个槽位的彩色截图已存 docs/slot_1~{len(slots)}.png")
+            self.log(f"{len(slots)} 个槽位的彩色截图已存 debug/slot_1~{len(slots)}.png")
         except Exception as e:
             self.log(f"测试出错：{type(e).__name__}: {e}", "warn")
             messagebox.showerror("测试出错", f"{type(e).__name__}: {e}")

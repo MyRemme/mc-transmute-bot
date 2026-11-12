@@ -42,7 +42,7 @@ except Exception:
 
 RESOURCE_DIR = os.path.dirname(os.path.abspath(__file__))
 HERE = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else RESOURCE_DIR
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 APP_NAME = "嬗变台自动刷取"
 REPO_URL = "https://github.com/MyRemme/mc-transmute-bot"
 BILIBILI_URL = "https://space.bilibili.com/1746890498"

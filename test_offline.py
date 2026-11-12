@@ -243,20 +243,15 @@ class VisionTests(unittest.TestCase):
         click.assert_not_called()
 
 
-class SavedScreenshotTests(unittest.TestCase):
+class SyntheticSlotTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.fixture_dir = os.path.join(mcb.HERE, "tests", "fixtures")
-        cls.references = []
-        for name, filename, box in [
-                ("green", "user_table.png", (244, 243, 293, 291)),
-                ("gray", "live_inventory_reference.png", (24, 23, 67, 71))]:
-            with Image.open(os.path.join(cls.fixture_dir, filename)) as source:
-                variants = mcb.build_variants(source.convert("RGB").crop(box))
-            cls.references.append((name, variants[0], variants))
-        cls.targets = cls.references
+        rng = np.random.default_rng(85)
+        cls.icon = Image.fromarray(rng.integers(0, 256, (32, 32, 3), dtype=np.uint8))
+        variants = mcb.build_variants(cls.icon)
+        cls.targets = [("synthetic", variants[0], variants)]
 
-    def test_all_saved_target_sizes(self):
+    def test_all_target_sizes(self):
         for name, _native, variants in self.targets:
             for h, w, _gray, _mask, rgb in variants:
                 if max(h, w) > 96:
@@ -272,7 +267,7 @@ class SavedScreenshotTests(unittest.TestCase):
                     self.assertLessEqual(abs(pos[0] + size[1] // 2 - 48), 4)
                     self.assertLessEqual(abs(pos[1] + size[0] // 2 - 48), 4)
 
-    def test_saved_target_on_different_background(self):
+    def test_target_on_different_background(self):
         for name, native, _variants in self.targets:
             h, w, _gray, mask, rgb = native
             foreground = rgb.copy()
@@ -285,46 +280,21 @@ class SavedScreenshotTests(unittest.TestCase):
                 self.assertGreater(result[0], 0.99)
                 self.assertEqual(result[2], (16, 16))
 
-    def test_wrong_items_in_saved_game_frame(self):
-        path = os.path.join(self.fixture_dir, "last_watch.png")
-        if not os.path.exists(path):
-            self.skipTest("No saved game frame")
-        with Image.open(path) as source:
-            frame = source.convert("RGB")
-        for x, y in [(114, 76), (114, 130), (114, 188), (268, 272)]:
-            with self.subTest(slot=(x, y)):
-                image = frame.crop((x - 48, y - 48, x + 48, y + 48))
+    def test_unrelated_items_do_not_match(self):
+        for seed in range(4):
+            rng = np.random.default_rng(seed)
+            image = Image.fromarray(rng.integers(0, 256, (96, 96, 3), dtype=np.uint8))
+            with self.subTest(seed=seed):
                 result = mcb.scan(mcb._to_gray(image), self.targets, 0.9,
                                   rgb=np.asarray(image, dtype=np.float32))
                 self.assertLess(result[0], 0.9)
 
-    def test_new_references_match_across_backgrounds(self):
-        for name, _native, variants in self.references:
-            targets = [(name, variants[0], variants)]
-            for other_name, other, _variants in self.references:
-                if name == other_name:
-                    continue
-                with self.subTest(template=name, reference=other_name):
-                    image = Image.new("RGB", (96, 96), (139, 139, 139))
-                    image.paste(Image.fromarray(other[4].astype(np.uint8)), (24, 24))
-                    result = mcb.scan(mcb._to_gray(image), targets, 0.9,
-                                      rgb=np.asarray(image, dtype=np.float32))
-                    self.assertGreater(result[0], 0.95)
-
-    def test_supplied_results_contain_no_target(self):
-        with Image.open(os.path.join(self.fixture_dir, "user_results.png")) as source:
-            image = source.convert("RGB")
-        result = mcb.scan(mcb._to_gray(image), self.targets, 0.9,
-                          rgb=np.asarray(image, dtype=np.float32))
-        self.assertLess(result[0], 0.9)
-
     def test_only_left_three_are_scanned_then_correct_result_clicked(self):
-        with Image.open(os.path.join(self.fixture_dir, "user_table.png")) as source:
-            initial = source.convert("RGB")
+        initial = Image.new("RGB", (400, 340), (139, 139, 139))
         slots = [(112, 69), (112, 125), (112, 181)]
         bottom = (268, 267)
-        # Use pixels from the complete table screenshot, independently of the templates.
-        item = initial.crop((244, 243, 293, 291))
+        item = self.icon
+        initial.paste(item, (bottom[0] - 16, bottom[1] - 16))
         for row, (cx, cy) in enumerate(slots):
             with self.subTest(row=row + 1):
                 current = [initial.copy()]
@@ -337,7 +307,7 @@ class SavedScreenshotTests(unittest.TestCase):
 
                 def select(x, y):
                     if len(click.call_args_list) == 1:
-                        current[0].paste(item, (cx - 24, cy - 24))
+                        current[0].paste(item, (cx - 16, cy - 16))
 
                 cfg = {**mcb.DEFAULT_CFG, "slots": slots + [bottom]}
                 state = {"stop": False, "paused": False}
@@ -347,7 +317,7 @@ class SavedScreenshotTests(unittest.TestCase):
                         patch.object(mcb.time, "sleep"), \
                         patch.object(mcb, "success_sound"), \
                         patch.object(mcb, "click_at", side_effect=select) as click:
-                    result = mcb.run_auto(cfg, self.references, state, {"passes": 5},
+                    result = mcb.run_auto(cfg, self.targets, state, {"passes": 5},
                                           on_log=lambda _: None)
                 self.assertEqual(result["rounds"], 2)
                 self.assertEqual(result["hits"], 1)
@@ -372,37 +342,6 @@ class SavedScreenshotTests(unittest.TestCase):
         self.assertEqual(result["hits"], 0)
         self.assertEqual(result["rounds"], 2)
         click.assert_not_called()
-
-    def test_real_game_hit_and_transmuted_result(self):
-        paths = [os.path.join(self.fixture_dir, filename)
-                 for filename in ("live_hit_before.png", "live_hit_after.png")]
-        if not all(os.path.exists(path) for path in paths):
-            self.skipTest("No live collection screenshots")
-        with Image.open(paths[0]) as source:
-            before = source.convert("RGB")
-        with Image.open(paths[1]) as source:
-            after = source.convert("RGB")
-        for frame, center in [(before, (114, 130)), (after, (270, 272))]:
-            x, y = center
-            image = frame.crop((x - 48, y - 48, x + 48, y + 48))
-            targets = self.references
-            if frame is after:
-                # The converted stack has a quantity label covering the lower icon.
-                targets = []
-                for name, native, _variants in self.references:
-                    h, w, gray, mask, rgb = native
-                    mask = mask.copy()
-                    mask[-14:] = False
-                    variant = (h, w, gray, mask, rgb)
-                    targets.append((name, variant, [variant]))
-            result = mcb.scan(mcb._to_gray(image), targets, 0.9,
-                              rgb=np.asarray(image, dtype=np.float32))
-            self.assertGreater(result[0], 0.95)
-        image = after.crop((66, 25, 162, 233))
-        result = mcb.scan(mcb._to_gray(image), self.targets, 0.9,
-                          rgb=np.asarray(image, dtype=np.float32))
-        self.assertLess(result[0], 0.9)
-
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

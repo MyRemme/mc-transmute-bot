@@ -15,6 +15,11 @@ docs/*
 !docs/ui_preview.png
 !docs/window_selection.png
 !docs/settings_preview.png
+!docs/table-region.png
+!docs/target-single-gray.png
+!docs/target-single-green.png
+debug/
+tests/fixtures/
 build/
 dist/
 *.log

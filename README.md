@@ -8,7 +8,7 @@ Windows 桌面工具，用截图和 RGB 模板匹配识别 Minecraft Alex’s Mo
 
 ## 一键运行
 
-1. 在 [Releases](https://github.com/MyRemme/mc-transmute-bot/releases/latest) 下载 `mc-transmute-bot-1.1.0-windows-x64.zip`。
+1. 在 [Releases](https://github.com/MyRemme/mc-transmute-bot/releases/latest) 下载 `mc-transmute-bot-1.1.1-windows-x64.zip`。
 2. 将压缩包完整解压到有写入权限的文件夹，双击 `嬗变台自动刷取.exe`。
 3. 打开 Minecraft，按下面的说明选择窗口、添加目标并标定候选。
 
@@ -30,7 +30,7 @@ python gui.py
 1. 在游戏里投入物品，手动转化刷新一次，保持嬗变台界面打开。
 2. 打开“标定与设置”，点“自动识别”或“手动选择”，确认选中的游戏窗口标题及进程。
 3. 点“标定三个候选”。从上到下悬停左侧三个候选图标，按标定快捷键，默认是 Space，满三个自动保存。
-4. 在“目标物品”添加图片，可一次选择多张，也可通过“截取目标”或“点选目标”从选定的游戏窗口获取。图片应包含清晰的单个物品图标。
+4. 在“目标物品”添加图片，可一次选择多张，也可通过“截取目标”或“点选目标”从选定的游戏窗口获取。每张图片只截一个物品，物品数量为 1，图标上不能有堆叠数量文字。
 5. 点“测试识别”查看当前三格分数。确认后点“开始刷”，或按开始快捷键 F8。
 6. 任一目标命中后程序点击对应候选，播放提示音并停止。需要中途结束时按停止快捷键，默认是 F10。
 
@@ -41,6 +41,22 @@ python gui.py
 目标列表支持滚动、多选移除和彩色预览。模板会适配多种 GUI 缩放，改变 GUI 布局后应重新标定。
 
 ![标定、参数与窗口设置](docs/settings_preview.png)
+
+## 截图示例
+
+使用“录制模式 → 截图框选”选择嬗变台实例区域时，按图 1 框住嬗变台面板，包含左侧三个候选和底部绿色槽位。
+
+**图 1 · 嬗变台实例的截图范围**
+
+![图 1，框选整个嬗变台面板](docs/table-region.png)
+
+添加目标物品时，参照图 3 或图 4 截取单个物品图标。灰色槽位背景和绿色槽位背景都可以。先将物品拆成数量为 1 的单个物品，再截取，图片中不能出现 `2`、`16`、`64` 等堆叠数量。
+
+| 图 3 · 灰色背景的单个目标 | 图 4 · 绿色背景的单个目标 |
+| --- | --- |
+| ![图 3，灰底单个钻石，无数量文字](docs/target-single-gray.png) | ![图 4，绿底单个钻石，无数量文字](docs/target-single-green.png) |
+
+自动模式仍需从上到下标定左侧三个候选中心。底部绿色槽位用于投入或显示转化后的物品。
 
 ## 选择游戏窗口
 
@@ -84,7 +100,7 @@ python gui.py
 
 ## 截图范围
 
-程序只读取 Minecraft 客户区及其中的候选区域。截图区域超出游戏窗口、游戏最小化或被其他窗口遮挡时停止。调试截图保存在本地 `docs/`，运行配置保存在本地 `config.json`。
+程序只读取 Minecraft 客户区及其中的候选区域。截图区域超出游戏窗口、游戏最小化或被其他窗口遮挡时停止。调试截图保存在本地 `debug/`，运行配置保存在本地 `config.json`。
 
 ## 录制模式
 
@@ -99,9 +115,7 @@ python test_offline.py
 python mcb.py selftest
 ```
 
-离线回归覆盖 RGB 匹配、遮罩、多尺寸、FFT 数值一致性、三个候选命中与停止、快捷键组合和防连发、提示音调用、窗口关闭及句柄复用。测试使用 `tests/fixtures/` 中裁好的游戏界面，运行测试不点击游戏。
-
-此前真实游戏验证中，目标在第 72 轮出现在第二格，分数 0.973。选择后底部获得 64 个目标并停止。相应裁图已用于回归测试。
+离线回归覆盖 RGB 匹配、遮罩、多尺寸、FFT 数值一致性、三个候选命中与停止、快捷键组合和防连发、提示音调用、窗口关闭及句柄复用。测试运行时生成合成图像，运行测试不点击游戏。
 
 ## 文件
 
@@ -115,7 +129,7 @@ python mcb.py selftest
 | `requirements.txt` | Python 依赖 |
 | `MCTransmuteBot.spec` | PyInstaller Windows 便携版构建配置 |
 | `build-release.ps1` | 构建 EXE、ZIP 和 SHA-256 校验文件 |
-| `tests/fixtures/` | 裁好的识别回归素材 |
+| `test_offline.py` | 使用合成图像的离线回归测试 |
 
 本机的 `config.json`、`targets/`、`macros/` 和调试截图通过 `.gitignore` 保留在本地。首次启动会使用默认配置，添加自己的目标图片并标定后即可运行。
 
@@ -131,3 +145,5 @@ powershell -ExecutionPolicy Bypass -File .\build-release.ps1
 ## 作者
 
 MyRemme · [GitHub 仓库](https://github.com/MyRemme/mc-transmute-bot) · [B站主页](https://space.bilibili.com/1746890498)
+
+觉得好用可以给我的仓库点 Star。[GitHub 仓库](https://github.com/MyRemme/mc-transmute-bot)

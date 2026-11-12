@@ -1,4 +1,4 @@
-param([string]$Version = '1.1.0')
+param([string]$Version = '1.1.1')
 
 $ErrorActionPreference = 'Stop'
 Push-Location $PSScriptRoot
@@ -14,7 +14,7 @@ try {
     New-Item -ItemType Directory -Path $images -Force | Out-Null
     Copy-Item -Path (Join-Path $application '*') -Destination $staging -Recurse -Force
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.md') -Destination $staging
-    foreach ($name in 'ui_preview.png', 'settings_preview.png', 'window_selection.png') {
+    foreach ($name in 'ui_preview.png', 'settings_preview.png', 'window_selection.png', 'table-region.png', 'target-single-gray.png', 'target-single-green.png') {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot "docs\$name") -Destination $images
     }
     Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $package -Force
